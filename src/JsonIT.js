@@ -35,30 +35,56 @@ const JsonIT = () => {
   const extractValueFromLogs = (logString, key) => {
     try {
       let adDataValue;
+      let reportingMetadataValue;
       
       if (logString.trim().startsWith('{')) {
         // If it's JSON format
         const logObj = JSON.parse(logString);
+        
+        // Try to get from top level first
         adDataValue = logObj.adData;
+        reportingMetadataValue = logObj.reportingMetadata;
+        
+        // If not found, try nested event field
+        if (!adDataValue && !reportingMetadataValue && logObj.event) {
+          try {
+            const eventObj = typeof logObj.event === 'string' ? JSON.parse(logObj.event) : logObj.event;
+            adDataValue = eventObj.adData;
+            reportingMetadataValue = eventObj.reportingMetadata;
+          } catch (e) {
+            // Fallback
+          }
+        }
       } else {
-        // If it's a plain log line, extract adData using regex
+        // If it's a plain log line, extract using regex
         const adDataMatch = logString.match(/adData="([^"]+)"/);
         if (adDataMatch) {
           adDataValue = adDataMatch[1];
         }
+        
+        const reportingMatch = logString.match(/reportingMetadata":"([^"]+)"/);
+        if (reportingMatch) {
+          reportingMetadataValue = reportingMatch[1];
+        }
       }
       
-      if (!adDataValue) {
+      // Try adData first, then reportingMetadata
+      let jsonToParse = adDataValue || reportingMetadataValue;
+      
+      if (!jsonToParse) {
         return null;
       }
       
-      // The adData contains escaped JSON, so we need to unescape it
-      const unescapedAdData = adDataValue
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, '\\');
+      // Handle multiple levels of escaping more robustly
+      let unescapedData = jsonToParse
+        .replace(/\\"/g, '"')           // \" -> "
+        .replace(/\\\\/g, '\\')         // \\ -> \
+        .replace(/\\n/g, '\n')          // \n -> newline
+        .replace(/\\t/g, '\t')          // \t -> tab
+        .replace(/\\r/g, '\r');         // \r -> carriage return
       
       // Parse the unescaped JSON
-      const adDataObj = JSON.parse(unescapedAdData);
+      const jsonObj = JSON.parse(unescapedData);
       
       // Navigate through the nested structure to find the key
       function findValueByKey(obj, targetKey) {
@@ -84,10 +110,22 @@ const JsonIT = () => {
         return null;
       }
       
-      const value = findValueByKey(adDataObj, key);
+      const value = findValueByKey(jsonObj, key);
       return value;
       
     } catch (error) {
+      // If JSON parsing fails, try regex extraction as fallback
+      const regexPatterns = {
+        'bidId': /"bidId"\s*:\s*"([^"]+)"/i,
+        'adId': /"adId"\s*:\s*"([^"]+)"/i
+      };
+      
+      const pattern = regexPatterns[key];
+      if (pattern) {
+        const match = logString.match(pattern);
+        return match ? match[1] : null;
+      }
+      
       return null;
     }
   };
@@ -139,10 +177,14 @@ const JsonIT = () => {
       // Try to parse adData if available
       if (kv.adData && (bidId === "-" || adId === "-")) {
         try {
-          // Handle multiple levels of escaping
+          // Handle multiple levels of escaping more robustly
           let unescapedData = kv.adData;
-          unescapedData = unescapedData.replace(/\\"/g, '"');
-          unescapedData = unescapedData.replace(/\\\\/g, '\\');
+          unescapedData = unescapedData
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\')
+            .replace(/\\n/g, '\n')
+            .replace(/\\t/g, '\t')
+            .replace(/\\r/g, '\r');
           
           const adJson = JSON.parse(unescapedData);
           
@@ -153,13 +195,15 @@ const JsonIT = () => {
             adId = adJson.bidAttributes.adId;
           }
         } catch (e) {
-          // Fallback to regex extraction if JSON parsing fails
+          // Enhanced fallback with better regex patterns
           if (bidId === "-") {
-            const bidMatch = kv.adData.match(/bidId["\\']*:\s*["\\']*([^"\\',}]+)/i);
+            const bidMatch = kv.adData.match(/"bidId"\s*:\s*"([^"]+)"/i) || 
+                            kv.adData.match(/bidId["\\']*:\s*["\\']*([^"\\',}]+)/i);
             if (bidMatch) bidId = bidMatch[1];
           }
           if (adId === "-") {
-            const adMatch = kv.adData.match(/adId["\\']*:\s*["\\']*([^"\\',}]+)/i);
+            const adMatch = kv.adData.match(/"adId"\s*:\s*"([^"]+)"/i) || 
+                           kv.adData.match(/adId["\\']*:\s*["\\']*([^"\\',}]+)/i);
             if (adMatch) adId = adMatch[1];
           }
         }
@@ -266,12 +310,75 @@ const JsonIT = () => {
         }
       }
 
+      // Try reportingMetadata if adData didn't work
+      if ((block.bid_id === "-" || block.ad_id === "-") && parsed.reportingMetadata) {
+        try {
+          let unescapedReporting = parsed.reportingMetadata;
+          if (typeof unescapedReporting === 'string') {
+            unescapedReporting = unescapedReporting
+              .replace(/\\"/g, '"')
+              .replace(/\\\\/g, '\\')
+              .replace(/\\n/g, '\n')
+              .replace(/\\t/g, '\t')
+              .replace(/\\r/g, '\r');
+            
+            const reportingJson = JSON.parse(unescapedReporting);
+            
+            if (block.bid_id === "-" && reportingJson?.bidAttributes?.bidId) {
+              block.bid_id = reportingJson.bidAttributes.bidId;
+            }
+            if (block.ad_id === "-" && reportingJson?.bidAttributes?.adId) {
+              block.ad_id = reportingJson.bidAttributes.adId;
+            }
+          }
+        } catch (e) {
+          // Fallback regex for reportingMetadata
+          if (block.bid_id === "-") {
+            const bidMatch = parsed.reportingMetadata.match(/"bidId"\s*:\s*"([^"]+)"/i);
+            if (bidMatch) block.bid_id = bidMatch[1];
+          }
+          if (block.ad_id === "-") {
+            const adMatch = parsed.reportingMetadata.match(/"adId"\s*:\s*"([^"]+)"/i);
+            if (adMatch) block.ad_id = adMatch[1];
+          }
+        }
+      }
+
       if (!block.bid_id || block.bid_id === "-" || seen.has(block.bid_id)) return;
       seen.add(block.bid_id);
 
       const prefix = line.match(/^(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
       const sourceTs = parsed.timestamp ?? parsed.cev_timestamp ?? parsed.eventTimestamp;
-      if (prefix && sourceTs) {
+
+      // Try to get timestamp from the nested event field if not found at top level
+      if (!sourceTs && parsed.event) {
+        try {
+          const eventObj = typeof parsed.event === 'string' ? JSON.parse(parsed.event) : parsed.event;
+          const eventTs = eventObj.cev_timestamp ?? eventObj.eventTimestamp;
+          if (eventTs) {
+            const base = new Date(String(eventTs).replace("+0000", "Z"));
+            if (!isNaN(base)) {
+              const yyyy = base.getUTCFullYear();
+              const mm = String(base.getUTCMonth() + 1).padStart(2, "0");
+              const dd = String(base.getUTCDate()).padStart(2, "0");
+              const hh = String(base.getUTCHours()).padStart(2, "0");
+              const mi = String(base.getUTCMinutes()).padStart(2, "0");
+              const ss = String(base.getUTCSeconds()).padStart(2, "0");
+              block.start_time = `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`;
+              const end = new Date(`${block.start_time}Z`);
+              if (!isNaN(end)) {
+                end.setUTCMinutes(end.getUTCMinutes() + 10);
+                block.end_time = end.toISOString().split(".")[0];
+              }
+            }
+          }
+        } catch (e) {
+          // Fallback to original logic
+        }
+      }
+
+      // Original timestamp logic (keep as fallback)
+      if (prefix && sourceTs && !block.start_time) {
         const base = new Date(String(sourceTs).replace("+0000", "Z"));
         if (!isNaN(base)) {
           const yyyy = base.getUTCFullYear();
@@ -289,14 +396,19 @@ const JsonIT = () => {
         }
       }
 
-      block.pfm =
-        parsed.deviceAttributes?.cor ||
-        parsed.deviceAttributes?.pfm ||
-        "-";
-      const tz =
-        parsed.deviceAttributes?.deviceLocalTime ||
-        parsed.deviceLocalTime ||
-        "-";
+      // Enhanced device attributes extraction
+      let deviceAttrs = parsed.deviceAttributes;
+      if (!deviceAttrs && parsed.event) {
+        try {
+          const eventObj = typeof parsed.event === 'string' ? JSON.parse(parsed.event) : parsed.event;
+          deviceAttrs = eventObj.deviceAttributes;
+        } catch (e) {
+          // Fallback
+        }
+      }
+
+      block.pfm = deviceAttrs?.cor || deviceAttrs?.pfm || "-";
+      const tz = deviceAttrs?.deviceLocalTime || parsed.deviceLocalTime || "-";
       block.time_zone = typeof tz === "string" ? tz.replace(/\\/g, "") : tz;
 
       blocks.push(block);

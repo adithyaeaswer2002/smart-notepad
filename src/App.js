@@ -2,7 +2,8 @@ import React from "react";
 import { BrowserRouter as Router, Routes, Route, useLocation, Link } from "react-router-dom";
 import SmartLogSearch from "./SmartLogSearch";
 import JsonIT from "./JsonIT";
-import ShineButton from "./Design";
+import { ShineButton } from "./Design";
+// import SplashCursor from "./Design";
 
 function NavButtons() {
   const location = useLocation();
@@ -22,6 +23,7 @@ function NavButtons() {
 export default function App() {
   return (
     <Router>
+      {/* <SplashCursor /> */}
       <NavButtons />
       <Routes>
         <Route path="/" element={<SmartLogSearch />} />

@@ -1,6 +1,7 @@
 // design.jsx
 import React from "react";
 import styled from "styled-components";
+// import { useEffect, useRef } from 'react';
 
 /* ---------------- WaveInput ---------------- */
 export const WaveInput = ({ label, value, onChange, name }) => {
@@ -138,8 +139,7 @@ const ButtonWrapper = styled.div`
   }
 `;
 
-/* ---------------- ShineButton ---------------- */
-const ShineButton = ({ active, children, ...props }) => (
+export const ShineButton = ({ active, children, ...props }) => (
   <StyledButton className={active ? 'active' : ''} {...props}>
     <span>{children}</span>
   </StyledButton>
@@ -215,9 +215,5 @@ const StyledButton = styled.button`
 `;
 
 export default ShineButton;
-
-
-
-
 
 
